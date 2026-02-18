@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
@@ -104,8 +106,10 @@ def create_article(journal_id: int, payload: ArticleCreate, db: Session = Depend
         slug=slug,
         content_json=payload.content_json,
         content_text=extract_editorjs_text(payload.content_json),
+        updated_at=datetime.now(timezone.utc),
     )
     db.add(article)
+
     db.commit()
     db.refresh(article)
     return article
@@ -138,6 +142,8 @@ def update_article(article_id: int, payload: ArticleUpdate, db: Session = Depend
     if payload.content_json is not None:
         article.content_json = payload.content_json
         article.content_text = extract_editorjs_text(payload.content_json)
+
+    article.updated_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(article)

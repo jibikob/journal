@@ -12,6 +12,7 @@ export type Article = {
   slug: string
   content_json: Record<string, unknown>
   content_text: string
+  updated_at: string
 }
 
 export type ApiError = {

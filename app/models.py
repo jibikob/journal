@@ -1,4 +1,4 @@
-from sqlalchemy import Column, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.types import JSON
@@ -28,5 +28,6 @@ class Article(Base):
     slug = Column(String(255), nullable=False, unique=True, index=True)
     content_json = Column(jsonb_type, nullable=False, default=dict)
     content_text = Column(Text, nullable=False, default="")
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     journal = relationship("Journal", back_populates="articles")

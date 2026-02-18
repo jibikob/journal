@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -52,6 +53,7 @@ class ArticleOut(BaseModel):
     slug: str
     content_json: dict[str, Any]
     content_text: str
+    updated_at: datetime
 
     class Config:
         from_attributes = True
