@@ -1,6 +1,83 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react'
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { api, Article, Journal } from './api'
 import './styles.css'
+
+type OutputData = {
+  blocks: Array<Record<string, unknown>>
+  time?: number
+  version?: string
+}
+
+type EditorInstance = {
+  save: () => Promise<OutputData>
+  destroy: () => Promise<void> | void
+}
+
+type EditorConstructor = new (config: {
+  holder: string
+  data: OutputData
+  tools: Record<string, unknown>
+  onChange: () => void
+}) => EditorInstance
+
+declare global {
+  interface Window {
+    EditorJS?: EditorConstructor
+    Header?: unknown
+    List?: unknown
+    Quote?: unknown
+    Delimiter?: unknown
+    Paragraph?: unknown
+  }
+}
+
+const EDITOR_SCRIPTS = [
+  'https://cdn.jsdelivr.net/npm/@editorjs/editorjs@2.30.8/dist/editorjs.umd.min.js',
+  'https://cdn.jsdelivr.net/npm/@editorjs/header@2.8.8/dist/header.umd.min.js',
+  'https://cdn.jsdelivr.net/npm/@editorjs/list@2.0.8/dist/list.umd.min.js',
+  'https://cdn.jsdelivr.net/npm/@editorjs/quote@2.7.6/dist/quote.umd.min.js',
+  'https://cdn.jsdelivr.net/npm/@editorjs/delimiter@1.4.2/dist/delimiter.umd.min.js',
+  'https://cdn.jsdelivr.net/npm/@editorjs/paragraph@2.11.6/dist/paragraph.umd.min.js',
+]
+
+let editorScriptsPromise: Promise<void> | null = null
+let navigationGuard: (() => boolean) | null = null
+
+function loadEditorScripts(): Promise<void> {
+  if (editorScriptsPromise) {
+    return editorScriptsPromise
+  }
+
+  editorScriptsPromise = EDITOR_SCRIPTS.reduce((chain, url) => {
+    return chain.then(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          if (document.querySelector(`script[data-editorjs-src="${url}"]`)) {
+            resolve()
+            return
+          }
+
+          const script = document.createElement('script')
+          script.src = url
+          script.async = true
+          script.dataset.editorjsSrc = url
+          script.onload = () => resolve()
+          script.onerror = () => reject(new Error(`Failed to load ${url}`))
+          document.head.appendChild(script)
+        }),
+    )
+  }, Promise.resolve())
+
+  return editorScriptsPromise
+}
+
+function setNavigationGuard(guard: (() => boolean) | null): void {
+  navigationGuard = guard
+}
+
+function canLeavePage(): boolean {
+  return navigationGuard ? navigationGuard() : true
+}
 
 type Route =
   | { name: 'journals' }
@@ -41,6 +118,9 @@ function parsePath(pathname: string): Route {
 
 function navigate(path: string): void {
   if (window.location.pathname === path) {
+    return
+  }
+  if (!canLeavePage()) {
     return
   }
   window.history.pushState({}, '', path)
@@ -306,22 +386,35 @@ function ArticleEditPage({ articleId }: { articleId: number }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [savedMessage, setSavedMessage] = useState<string | null>(null)
 
   const [title, setTitle] = useState('')
   const [slug, setSlug] = useState('')
-  const [content, setContent] = useState('')
+  const [contentJson, setContentJson] = useState<OutputData | null>(null)
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null)
   const [journalId, setJournalId] = useState<number | null>(null)
+
+  const editorRef = useRef<EditorInstance | null>(null)
+  const hasUnsavedChangesRef = useRef(false)
+  const editorHolderId = `editorjs-${articleId}`
+
+  const markUnsaved = () => {
+    hasUnsavedChangesRef.current = true
+    setSavedMessage(null)
+  }
 
   useEffect(() => {
     const loadArticle = async () => {
       setLoading(true)
       setError(null)
       try {
-        const loadedArticle = await api.getArticle(articleId)
-        setTitle(loadedArticle.title)
-        setSlug(loadedArticle.slug)
-        setContent(loadedArticle.content_text)
-        setJournalId(loadedArticle.journal_id)
+        const loaded = await api.getArticle(articleId)
+        setTitle(loaded.title)
+        setSlug(loaded.slug)
+        setContentJson(loaded.content_json as OutputData)
+        setUpdatedAt(loaded.updated_at)
+        setJournalId(loaded.journal_id)
+        hasUnsavedChangesRef.current = false
       } catch (loadError) {
         setError((loadError as Error).message)
       } finally {
@@ -332,18 +425,95 @@ function ArticleEditPage({ articleId }: { articleId: number }) {
     void loadArticle()
   }, [articleId])
 
+  useEffect(() => {
+    if (loading || !contentJson) {
+      return
+    }
+
+    let disposed = false
+    let localEditor: EditorInstance | null = null
+
+    const init = async () => {
+      try {
+        await loadEditorScripts()
+        if (disposed || !window.EditorJS) {
+          return
+        }
+
+        localEditor = new window.EditorJS({
+          holder: editorHolderId,
+          data: contentJson,
+          tools: {
+            paragraph: window.Paragraph,
+            header: window.Header,
+            list: window.List,
+            quote: window.Quote,
+            delimiter: window.Delimiter,
+          },
+          onChange: markUnsaved,
+        })
+
+        editorRef.current = localEditor
+      } catch (initError) {
+        setError((initError as Error).message)
+      }
+    }
+
+    void init()
+
+    return () => {
+      disposed = true
+      editorRef.current = null
+      if (localEditor) {
+        void localEditor.destroy()
+      }
+    }
+  }, [loading, contentJson, editorHolderId])
+
+  useEffect(() => {
+    const guard = () => {
+      if (!hasUnsavedChangesRef.current) {
+        return true
+      }
+      return window.confirm('У вас есть несохраненные изменения. Покинуть страницу?')
+    }
+
+    setNavigationGuard(guard)
+
+    const beforeUnloadHandler = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedChangesRef.current) {
+        return
+      }
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', beforeUnloadHandler)
+
+    return () => {
+      if (navigationGuard === guard) {
+        setNavigationGuard(null)
+      }
+      window.removeEventListener('beforeunload', beforeUnloadHandler)
+    }
+  }, [])
+
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault()
     setSubmitting(true)
     setError(null)
 
     try {
+      const contentForSave = editorRef.current ? await editorRef.current.save() : { blocks: [] }
       const updated = await api.updateArticle(articleId, {
         title,
         slug,
-        content_json: { text: content },
+        content_json: contentForSave,
       })
-      navigate(`/articles/${updated.id}`)
+      setUpdatedAt(updated.updated_at)
+      setSavedMessage('Saved')
+      setContentJson(updated.content_json as OutputData)
+      hasUnsavedChangesRef.current = false
     } catch (submitError) {
       setError((submitError as Error).message)
     } finally {
@@ -367,17 +537,33 @@ function ArticleEditPage({ articleId }: { articleId: number }) {
           <form className="form-grid" onSubmit={onSubmit}>
             <label>
               Заголовок
-              <input value={title} onChange={(e) => setTitle(e.target.value)} required />
+              <input
+                value={title}
+                onChange={(e) => {
+                  setTitle(e.target.value)
+                  markUnsaved()
+                }}
+                required
+              />
             </label>
             <label>
               Slug
-              <input value={slug} onChange={(e) => setSlug(e.target.value)} required />
+              <input
+                value={slug}
+                onChange={(e) => {
+                  setSlug(e.target.value)
+                  markUnsaved()
+                }}
+                required
+              />
             </label>
-            <label>
-              Текст
-              <textarea rows={8} value={content} onChange={(e) => setContent(e.target.value)} />
-            </label>
-            <button disabled={submitting}>{submitting ? 'Сохранение...' : 'Сохранить'}</button>
+            <div>
+              Контент
+              <div id={editorHolderId} className="editor" />
+            </div>
+            <button disabled={submitting || loading}>{submitting ? 'Сохранение...' : 'Save'}</button>
+            {savedMessage && <p className="success">{savedMessage}</p>}
+            {updatedAt && <p className="muted">Updated at: {new Date(updatedAt).toLocaleString()}</p>}
           </form>
         </section>
       )}
@@ -387,13 +573,25 @@ function ArticleEditPage({ articleId }: { articleId: number }) {
 
 export default function App() {
   const [pathname, setPathname] = useState(window.location.pathname)
+  const pathnameRef = useRef(pathname)
+
+  useEffect(() => {
+    pathnameRef.current = pathname
+  }, [pathname])
 
   useEffect(() => {
     if (window.location.pathname === '/') {
       navigate('/journals')
     }
 
-    const handlePopState = () => setPathname(window.location.pathname)
+    const handlePopState = () => {
+      if (!canLeavePage()) {
+        window.history.pushState({}, '', pathnameRef.current)
+        return
+      }
+      setPathname(window.location.pathname)
+    }
+
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])

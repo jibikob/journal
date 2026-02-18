@@ -69,3 +69,29 @@ def test_extract_editorjs_text():
 
     result = extract_editorjs_text(content)
     assert result == "Header\nCaption\nBody\nitem 1\nitem 2"
+
+
+def test_update_article_refreshes_updated_at_and_content():
+    journal_resp = client.post("/api/journals", json={"title": "Tech Journal"})
+    journal_id = journal_resp.json()["id"]
+
+    article_resp = client.post(
+        f"/api/journals/{journal_id}/articles",
+        json={
+            "title": "Initial",
+            "content_json": {"blocks": [{"type": "paragraph", "data": {"text": "old"}}]},
+        },
+    )
+    article = article_resp.json()
+
+    patch_resp = client.patch(
+        f"/api/articles/{article['id']}",
+        json={
+            "content_json": {"blocks": [{"type": "paragraph", "data": {"text": "new"}}]},
+        },
+    )
+
+    assert patch_resp.status_code == 200
+    updated = patch_resp.json()
+    assert updated["content_text"] == "new"
+    assert updated["updated_at"] >= article["updated_at"]
