@@ -152,3 +152,29 @@ button:disabled {
 .wiki-link:hover::after {
   opacity: 1;
 }
+
+.index-tool {
+  display: grid;
+  gap: 8px;
+}
+
+.index-tool-button {
+  background: #0e7490;
+}
+
+.index-tool-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.index-list-view {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+
+.wiki-link::after {
+  white-space: pre-line;
+  max-width: 260px;
+}

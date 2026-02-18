@@ -12,6 +12,11 @@ type WikiLinkConfig = {
   journalId: number
 }
 
+type IndexEntry = {
+  articleId: number
+  title: string
+}
+
 type EditorApi = {
   selection: {
     findParentTag: (tagName: string) => HTMLElement | null
@@ -28,6 +33,11 @@ type EditorInlineTool = {
 type EditorInstance = {
   save: () => Promise<OutputData>
   destroy: () => Promise<void> | void
+}
+
+type EditorBlockTool = {
+  render: () => HTMLElement
+  save: (blockContent: HTMLElement) => Record<string, unknown>
 }
 
 type EditorConstructor = new (config: {
@@ -137,6 +147,90 @@ class WikiLinkInlineTool implements EditorInlineTool {
     }
 
     return results[selectedIndex]
+  }
+}
+
+
+class IndexListTool implements EditorBlockTool {
+  static toolbox = {
+    title: 'IndexList',
+    icon: '<svg width="18" height="18" viewBox="0 0 18 18"><path d="M3 4h12v2H3V4Zm0 4h12v2H3V8Zm0 4h12v2H3v-2Z"/></svg>',
+  }
+
+  private readonly journalId: number
+  private readonly data: { entries?: IndexEntry[] }
+
+  constructor({ config, data }: { config: WikiLinkConfig; data: { entries?: IndexEntry[] } }) {
+    this.journalId = config.journalId
+    this.data = data || {}
+  }
+
+  render(): HTMLElement {
+    const wrapper = document.createElement('div')
+    wrapper.className = 'index-tool'
+
+    const entries = this.data.entries || []
+    const list = document.createElement('ul')
+    list.className = 'index-tool-list'
+
+    const renderItems = () => {
+      list.innerHTML = ''
+      entries.forEach((entry) => {
+        const li = document.createElement('li')
+        li.textContent = `${entry.title} (#${entry.articleId})`
+        list.appendChild(li)
+      })
+    }
+
+    const addButton = document.createElement('button')
+    addButton.type = 'button'
+    addButton.className = 'index-tool-button'
+    addButton.textContent = 'Добавить ссылку'
+    addButton.onclick = async () => {
+      const query = window.prompt('Search article')
+      if (!query) {
+        return
+      }
+      const results = await api.searchJournalArticles(this.journalId, query)
+      if (results.length === 0) {
+        window.alert('No articles found')
+        return
+      }
+      const selected = window.prompt(
+        `Pick article number:
+${results
+          .slice(0, 10)
+          .map((item, index) => `${index + 1}. ${item.title} (#${item.id})`)
+          .join('\n')}`,
+      )
+      if (!selected) {
+        return
+      }
+      const selectedIndex = Number(selected) - 1
+      if (!Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= Math.min(results.length, 10)) {
+        window.alert('Invalid selection')
+        return
+      }
+      const picked = results[selectedIndex]
+      entries.push({ articleId: picked.id, title: picked.title })
+      renderItems()
+    }
+
+    renderItems()
+    wrapper.appendChild(addButton)
+    wrapper.appendChild(list)
+    return wrapper
+  }
+
+  save(blockContent: HTMLElement): Record<string, unknown> {
+    const entries = Array.from(blockContent.querySelectorAll('li')).map((item) => {
+      const match = item.textContent?.match(/^(.*) \(#(\d+)\)$/)
+      if (!match) {
+        return null
+      }
+      return { articleId: Number(match[2]), title: match[1] }
+    })
+    return { entries: entries.filter(Boolean) }
   }
 }
 
@@ -344,7 +438,11 @@ function JournalDetailsPage({ journalId }: { journalId: number }) { /* unchanged
   )
 }
 
-function renderBlockHtml(block: Record<string, unknown>, articleTitleById: Record<number, string>): string {
+function renderBlockHtml(
+  block: Record<string, unknown>,
+  articleTitleById: Record<number, string>,
+  articlePreviewById: Record<number, string>,
+): string {
   const type = (block.type as string) ?? 'paragraph'
   const data = (block.data as Record<string, unknown>) ?? {}
   const rawText = typeof data.text === 'string' ? data.text : ''
@@ -360,9 +458,30 @@ function renderBlockHtml(block: Record<string, unknown>, articleTitleById: Recor
     anchor.setAttribute('href', `/articles/${articleId}`)
     anchor.setAttribute('target', '_blank')
     anchor.setAttribute('rel', 'noopener noreferrer')
-    anchor.setAttribute('data-tooltip', title)
+    const preview = articlePreviewById[articleId]
+    anchor.setAttribute('data-tooltip', preview ? `${title}\n${preview}` : title)
     anchor.classList.add('wiki-link')
   })
+
+
+  if (type === 'indexList') {
+    const entries = Array.isArray(data.entries) ? (data.entries as Array<Record<string, unknown>>) : []
+    const listItems = entries
+      .map((entry) => {
+        const id = typeof entry.articleId === 'number' ? entry.articleId : Number(entry.articleId)
+        if (!Number.isFinite(id)) {
+          return ''
+        }
+        const title = articleTitleById[id] || (typeof entry.title === 'string' ? entry.title : `Статья #${id}`)
+        const preview = articlePreviewById[id]
+        const tooltip = preview ? `${title}\n${preview}` : title
+        return `<li><a class="wiki-link" data-tooltip="${tooltip.replace(/"/g, '&quot;')}" href="/articles/${id}" target="_blank" rel="noopener noreferrer">${title}</a></li>`
+      })
+      .filter(Boolean)
+      .join('')
+
+    return `<ul class="index-list-view">${listItems}</ul>`
+  }
 
   const html = doc.body.firstElementChild?.innerHTML ?? rawText
   if (type === 'header') {
@@ -376,6 +495,7 @@ function ArticleViewPage({ articleId }: { articleId: number }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [articleTitleById, setArticleTitleById] = useState<Record<number, string>>({})
+  const [articlePreviewById, setArticlePreviewById] = useState<Record<number, string>>({})
 
   useEffect(() => {
     const loadArticle = async () => {
@@ -386,6 +506,11 @@ function ArticleViewPage({ articleId }: { articleId: number }) {
         setArticle(loadedArticle)
         const relatedArticles = await api.listJournalArticles(loadedArticle.journal_id)
         setArticleTitleById(Object.fromEntries(relatedArticles.map((item) => [item.id, item.title])))
+        setArticlePreviewById(
+          Object.fromEntries(
+            relatedArticles.map((item) => [item.id, (item.content_text || "").split("\n").slice(0, 2).join(" ")]),
+          ),
+        )
       } catch (loadError) {
         setError((loadError as Error).message)
       } finally {
@@ -408,9 +533,9 @@ function ArticleViewPage({ articleId }: { articleId: number }) {
 
     return contentJson.blocks.map((block, index) => ({
       id: index,
-      html: renderBlockHtml(block, articleTitleById),
+      html: renderBlockHtml(block, articleTitleById, articlePreviewById),
     }))
-  }, [article, articleTitleById])
+  }, [article, articleTitleById, articlePreviewById])
 
   return (
     <div className="page">
@@ -512,6 +637,7 @@ function ArticleEditPage({ articleId }: { articleId: number }) {
             quote: { class: window.Quote, inlineToolbar: true },
             delimiter: window.Delimiter,
             wikilink: { class: WikiLinkInlineTool, config: { journalId } },
+            indexList: { class: IndexListTool, config: { journalId } },
           },
           onChange: markUnsaved,
         })
