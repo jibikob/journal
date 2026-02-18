@@ -1,11 +1,11 @@
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
-from app.utils import extract_editorjs_text
+from app.utils import extract_editorjs_text, extract_wiki_links
 
 SQLALCHEMY_DATABASE_URL = "sqlite://"
 engine = create_engine(
@@ -71,6 +71,24 @@ def test_extract_editorjs_text():
     assert result == "Header\nCaption\nBody\nitem 1\nitem 2"
 
 
+def test_extract_wiki_links():
+    content = {
+        "blocks": [
+            {
+                "type": "paragraph",
+                "data": {
+                    "text": '<a data-article-id="2">Target 2</a> and <a data-article-id="3">Target 3</a>'
+                },
+            }
+        ]
+    }
+
+    assert extract_wiki_links(content) == [
+        {"to_article_id": 2, "anchor": "Target 2"},
+        {"to_article_id": 3, "anchor": "Target 3"},
+    ]
+
+
 def test_update_article_refreshes_updated_at_and_content():
     journal_resp = client.post("/api/journals", json={"title": "Tech Journal"})
     journal_id = journal_resp.json()["id"]
@@ -87,11 +105,43 @@ def test_update_article_refreshes_updated_at_and_content():
     patch_resp = client.patch(
         f"/api/articles/{article['id']}",
         json={
-            "content_json": {"blocks": [{"type": "paragraph", "data": {"text": "new"}}]},
+            "content_json": {
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "data": {"text": '<a data-article-id="999">new anchor</a>'},
+                    }
+                ]
+            },
         },
     )
 
     assert patch_resp.status_code == 200
     updated = patch_resp.json()
-    assert updated["content_text"] == "new"
+    assert updated["content_text"] == "new anchor"
     assert updated["updated_at"] >= article["updated_at"]
+
+    with engine.connect() as conn:
+        links = conn.execute(text("SELECT from_article_id, to_article_id, anchor FROM article_links")).fetchall()
+
+    assert len(links) == 1
+    assert links[0][1] == 999
+    assert links[0][2] == "new anchor"
+
+
+def test_search_articles_endpoint_returns_journal_matches():
+    journal_resp = client.post("/api/journals", json={"title": "Search Journal"})
+    journal_id = journal_resp.json()["id"]
+
+    client.post(f"/api/journals/{journal_id}/articles", json={"title": "Alpha"})
+    client.post(f"/api/journals/{journal_id}/articles", json={"title": "Beta"})
+
+    other_journal = client.post("/api/journals", json={"title": "Other Journal"}).json()
+    client.post(f"/api/journals/{other_journal['id']}/articles", json={"title": "Alpha Other"})
+
+    response = client.get(f"/api/journals/{journal_id}/articles/search?q=alp")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["title"] == "Alpha"

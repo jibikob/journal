@@ -120,3 +120,35 @@ button:disabled {
   font-weight: 600;
   margin: 0;
 }
+
+.content-rich {
+  display: grid;
+  gap: 8px;
+}
+
+.wiki-link {
+  position: relative;
+  color: #0e7490;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+.wiki-link::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  bottom: 115%;
+  opacity: 0;
+  pointer-events: none;
+  background: #111827;
+  color: #f9fafb;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  transition: opacity 0.15s ease;
+}
+
+.wiki-link:hover::after {
+  opacity: 1;
+}
