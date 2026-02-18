@@ -46,6 +46,16 @@ class ArticleUpdate(BaseModel):
     content_json: dict[str, Any] | None = None
 
 
+
+
+class ArticleSearchOut(BaseModel):
+    id: int
+    title: str
+
+    class Config:
+        from_attributes = True
+
+
 class ArticleOut(BaseModel):
     id: int
     journal_id: int

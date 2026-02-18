@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.types import JSON
@@ -31,3 +31,29 @@ class Article(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     journal = relationship("Journal", back_populates="articles")
+    outgoing_links = relationship(
+        "ArticleLink",
+        back_populates="from_article",
+        foreign_keys="ArticleLink.from_article_id",
+        cascade="all, delete-orphan",
+    )
+    incoming_links = relationship(
+        "ArticleLink",
+        back_populates="to_article",
+        foreign_keys="ArticleLink.to_article_id",
+        cascade="all, delete-orphan",
+    )
+
+
+class ArticleLink(Base):
+    __tablename__ = "article_links"
+    __table_args__ = (UniqueConstraint("from_article_id", "to_article_id", "anchor", name="uq_article_links_from_to_anchor"),)
+
+
+    id = Column(Integer, primary_key=True, index=True)
+    from_article_id = Column(Integer, ForeignKey("articles.id", ondelete="CASCADE"), nullable=False, index=True)
+    to_article_id = Column(Integer, ForeignKey("articles.id", ondelete="CASCADE"), nullable=False, index=True)
+    anchor = Column(String(255), nullable=False)
+
+    from_article = relationship("Article", foreign_keys=[from_article_id], back_populates="outgoing_links")
+    to_article = relationship("Article", foreign_keys=[to_article_id], back_populates="incoming_links")

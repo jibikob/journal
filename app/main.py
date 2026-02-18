@@ -1,23 +1,51 @@
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
+from sqlalchemy import delete, func
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
-from .models import Article, Journal
+from .models import Article, ArticleLink, Journal
 from .schemas import (
     ArticleCreate,
     ArticleOut,
+    ArticleSearchOut,
     ArticleUpdate,
     JournalCreate,
     JournalOut,
     JournalUpdate,
 )
-from .utils import extract_editorjs_text, slugify
+from .utils import extract_editorjs_text, extract_wiki_links, slugify
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Journal API")
+
+
+def sync_article_links(db: Session, article: Article) -> None:
+    links = extract_wiki_links(article.content_json)
+
+    db.execute(delete(ArticleLink).where(ArticleLink.from_article_id == article.id))
+
+    if not links:
+        return
+
+    rows = [
+        {
+            "from_article_id": article.id,
+            "to_article_id": link["to_article_id"],
+            "anchor": link["anchor"],
+        }
+        for link in links
+    ]
+
+    insert_stmt = sqlite_insert(ArticleLink).values(rows)
+    upsert_stmt = insert_stmt.on_conflict_do_update(
+        index_elements=["from_article_id", "to_article_id", "anchor"],
+        set_={"anchor": insert_stmt.excluded.anchor},
+    )
+    db.execute(upsert_stmt)
 
 
 @app.get("/api/journals", response_model=list[JournalOut])
@@ -87,6 +115,20 @@ def list_articles(journal_id: int, db: Session = Depends(get_db)):
     return db.query(Article).filter(Article.journal_id == journal_id).order_by(Article.id).all()
 
 
+@app.get("/api/journals/{journal_id}/articles/search", response_model=list[ArticleSearchOut])
+def search_articles(journal_id: int, q: str = Query(default=""), db: Session = Depends(get_db)):
+    if not db.get(Journal, journal_id):
+        raise HTTPException(status_code=404, detail="Journal not found")
+
+    query = db.query(Article).filter(Article.journal_id == journal_id)
+    search = q.strip()
+    if search:
+        like_pattern = f"%{search.lower()}%"
+        query = query.filter(func.lower(Article.title).like(like_pattern))
+
+    return query.order_by(Article.updated_at.desc(), Article.id.desc()).limit(20).all()
+
+
 @app.post(
     "/api/journals/{journal_id}/articles",
     response_model=ArticleOut,
@@ -109,6 +151,8 @@ def create_article(journal_id: int, payload: ArticleCreate, db: Session = Depend
         updated_at=datetime.now(timezone.utc),
     )
     db.add(article)
+    db.flush()
+    sync_article_links(db, article)
 
     db.commit()
     db.refresh(article)
@@ -142,6 +186,7 @@ def update_article(article_id: int, payload: ArticleUpdate, db: Session = Depend
     if payload.content_json is not None:
         article.content_json = payload.content_json
         article.content_text = extract_editorjs_text(payload.content_json)
+        sync_article_links(db, article)
 
     article.updated_at = datetime.now(timezone.utc)
 

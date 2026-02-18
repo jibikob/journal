@@ -1,11 +1,28 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
-import { api, Article, Journal } from './api'
+import { api, Article, ArticleSearchResult, Journal } from './api'
 import './styles.css'
 
 type OutputData = {
   blocks: Array<Record<string, unknown>>
   time?: number
   version?: string
+}
+
+type WikiLinkConfig = {
+  journalId: number
+}
+
+type EditorApi = {
+  selection: {
+    findParentTag: (tagName: string) => HTMLElement | null
+    expandToTag: (element: HTMLElement) => void
+  }
+}
+
+type EditorInlineTool = {
+  render: () => HTMLElement
+  surround: (range: Range) => void
+  checkState: () => void
 }
 
 type EditorInstance = {
@@ -28,6 +45,98 @@ declare global {
     Quote?: unknown
     Delimiter?: unknown
     Paragraph?: unknown
+  }
+}
+
+class WikiLinkInlineTool implements EditorInlineTool {
+  static isInline = true
+  static title = 'Link to article'
+
+  private readonly api: EditorApi
+  private readonly config: WikiLinkConfig
+  private button: HTMLButtonElement | null = null
+
+  constructor({ api: editorApi, config }: { api: EditorApi; config: WikiLinkConfig }) {
+    this.api = editorApi
+    this.config = config
+  }
+
+  render(): HTMLElement {
+    this.button = document.createElement('button')
+    this.button.type = 'button'
+    this.button.classList.add('cdx-settings-button')
+    this.button.textContent = 'Wiki'
+    return this.button
+  }
+
+  async surround(range: Range): Promise<void> {
+    if (!range || range.collapsed) {
+      return
+    }
+
+    const selectedText = range.toString().trim()
+    if (!selectedText) {
+      return
+    }
+
+    const query = window.prompt('Search article', selectedText)
+    if (query === null) {
+      return
+    }
+
+    const results = await api.searchJournalArticles(this.config.journalId, query)
+    if (results.length === 0) {
+      window.alert('No articles found')
+      return
+    }
+
+    const picked = this.pickArticle(results)
+    if (!picked) {
+      return
+    }
+
+    const anchor = document.createElement('a')
+    anchor.dataset.articleId = String(picked.id)
+    anchor.dataset.articleTitle = picked.title
+    anchor.href = `/articles/${picked.id}`
+    anchor.className = 'wiki-link'
+    anchor.textContent = selectedText
+
+    const extracted = range.extractContents()
+    if (!extracted.textContent?.trim()) {
+      return
+    }
+
+    range.insertNode(anchor)
+    this.api.selection.expandToTag(anchor)
+  }
+
+  checkState(): void {
+    const anchorTag = this.api.selection.findParentTag('A')
+    if (!this.button) {
+      return
+    }
+    this.button.classList.toggle('cdx-settings-button--active', Boolean(anchorTag?.dataset.articleId))
+  }
+
+  private pickArticle(results: ArticleSearchResult[]): ArticleSearchResult | null {
+    const optionsText = results
+      .slice(0, 10)
+      .map((item, index) => `${index + 1}. ${item.title} (#${item.id})`)
+      .join('\n')
+
+    const selectedRaw = window.prompt(`Pick article number:\n${optionsText}`)
+    if (!selectedRaw) {
+      return null
+    }
+
+    const selectedIndex = Number(selectedRaw) - 1
+    if (!Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= Math.min(results.length, 10)) {
+      window.alert('Invalid selection')
+      return null
+    }
+
+    return results[selectedIndex]
   }
 }
 
@@ -141,16 +250,14 @@ function AppLink({ href, children }: { href: string; children: ReactNode }) {
   )
 }
 
-function JournalsPage() {
+function JournalsPage() { /* unchanged */
   const [journals, setJournals] = useState<Journal[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
   const [title, setTitle] = useState('')
   const [slug, setSlug] = useState('')
   const [description, setDescription] = useState('')
   const [submitting, setSubmitting] = useState(false)
-
   const loadJournals = async () => {
     setLoading(true)
     setError(null)
@@ -162,22 +269,15 @@ function JournalsPage() {
       setLoading(false)
     }
   }
-
   useEffect(() => {
     void loadJournals()
   }, [])
-
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault()
     setSubmitting(true)
     setError(null)
-
     try {
-      await api.createJournal({
-        title,
-        slug: slug || undefined,
-        description: description || undefined,
-      })
+      await api.createJournal({ title, slug: slug || undefined, description: description || undefined })
       setTitle('')
       setSlug('')
       setDescription('')
@@ -188,66 +288,29 @@ function JournalsPage() {
       setSubmitting(false)
     }
   }
-
   return (
     <div className="page">
       <h1>Журналы</h1>
-      <section className="card">
-        <h2>Создать журнал</h2>
-        <form onSubmit={onSubmit} className="form-grid">
-          <label>
-            Название
-            <input value={title} onChange={(e) => setTitle(e.target.value)} required />
-          </label>
-          <label>
-            Slug
-            <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="optional" />
-          </label>
-          <label>
-            Описание
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
-          </label>
-          <button disabled={submitting}>{submitting ? 'Создание...' : 'Создать'}</button>
-        </form>
-      </section>
-
-      <section className="card">
-        <h2>Список журналов</h2>
-        {loading && <p className="info">Загрузка...</p>}
-        {error && <p className="error">Ошибка: {error}</p>}
-        {!loading && journals.length === 0 && <p className="info">Пока журналов нет.</p>}
-        <ul className="list">
-          {journals.map((journal) => (
-            <li key={journal.id}>
-              <AppLink href={`/journals/${journal.id}`}>{journal.title}</AppLink>
-              <span className="muted"> / {journal.slug}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
+      <section className="card"><h2>Создать журнал</h2><form onSubmit={onSubmit} className="form-grid"><label>Название<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label>Slug<input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="optional" /></label><label>Описание<textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} /></label><button disabled={submitting}>{submitting ? 'Создание...' : 'Создать'}</button></form></section>
+      <section className="card"><h2>Список журналов</h2>{loading && <p className="info">Загрузка...</p>}{error && <p className="error">Ошибка: {error}</p>}{!loading && journals.length === 0 && <p className="info">Пока журналов нет.</p>}<ul className="list">{journals.map((journal) => (<li key={journal.id}><AppLink href={`/journals/${journal.id}`}>{journal.title}</AppLink><span className="muted"> / {journal.slug}</span></li>))}</ul></section>
     </div>
   )
 }
 
-function JournalDetailsPage({ journalId }: { journalId: number }) {
+function JournalDetailsPage({ journalId }: { journalId: number }) { /* unchanged */
   const [journal, setJournal] = useState<Journal | null>(null)
   const [articles, setArticles] = useState<Article[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
   const [title, setTitle] = useState('')
   const [slug, setSlug] = useState('')
   const [content, setContent] = useState('')
   const [submitting, setSubmitting] = useState(false)
-
   const loadData = async () => {
     setLoading(true)
     setError(null)
     try {
-      const [journalResponse, articlesResponse] = await Promise.all([
-        api.getJournal(journalId),
-        api.listJournalArticles(journalId),
-      ])
+      const [journalResponse, articlesResponse] = await Promise.all([api.getJournal(journalId), api.listJournalArticles(journalId)])
       setJournal(journalResponse)
       setArticles(articlesResponse)
     } catch (loadError) {
@@ -256,22 +319,15 @@ function JournalDetailsPage({ journalId }: { journalId: number }) {
       setLoading(false)
     }
   }
-
   useEffect(() => {
     void loadData()
   }, [journalId])
-
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault()
     setSubmitting(true)
     setError(null)
-
     try {
-      await api.createArticle(journalId, {
-        title,
-        slug: slug || undefined,
-        content_json: { text: content },
-      })
+      await api.createArticle(journalId, { title, slug: slug || undefined, content_json: { text: content } })
       setTitle('')
       setSlug('')
       setContent('')
@@ -284,70 +340,52 @@ function JournalDetailsPage({ journalId }: { journalId: number }) {
   }
 
   return (
-    <div className="page">
-      <p>
-        <AppLink href="/journals">← К журналам</AppLink>
-      </p>
-
-      {loading && <p className="info">Загрузка...</p>}
-      {error && <p className="error">Ошибка: {error}</p>}
-
-      {journal && (
-        <>
-          <section className="card">
-            <h1>{journal.title}</h1>
-            <p className="muted">/{journal.slug}</p>
-            <p>{journal.description || 'Нет описания'}</p>
-          </section>
-
-          <section className="card">
-            <h2>Создать статью</h2>
-            <form onSubmit={onSubmit} className="form-grid">
-              <label>
-                Заголовок
-                <input value={title} onChange={(e) => setTitle(e.target.value)} required />
-              </label>
-              <label>
-                Slug
-                <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="optional" />
-              </label>
-              <label>
-                Текст
-                <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={5} />
-              </label>
-              <button disabled={submitting}>{submitting ? 'Создание...' : 'Создать статью'}</button>
-            </form>
-          </section>
-
-          <section className="card">
-            <h2>Статьи</h2>
-            {articles.length === 0 && <p className="info">Пока статей нет.</p>}
-            <ul className="list">
-              {articles.map((article) => (
-                <li key={article.id}>
-                  <AppLink href={`/articles/${article.id}`}>{article.title}</AppLink>
-                  <span className="muted"> / {article.slug}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </>
-      )}
-    </div>
+    <div className="page"><p><AppLink href="/journals">← К журналам</AppLink></p>{loading && <p className="info">Загрузка...</p>}{error && <p className="error">Ошибка: {error}</p>}{journal && <><section className="card"><h1>{journal.title}</h1><p className="muted">/{journal.slug}</p><p>{journal.description || 'Нет описания'}</p></section><section className="card"><h2>Создать статью</h2><form onSubmit={onSubmit} className="form-grid"><label>Заголовок<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label>Slug<input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="optional" /></label><label>Текст<textarea value={content} onChange={(e) => setContent(e.target.value)} rows={5} /></label><button disabled={submitting}>{submitting ? 'Создание...' : 'Создать статью'}</button></form></section><section className="card"><h2>Статьи</h2>{articles.length === 0 && <p className="info">Пока статей нет.</p>}<ul className="list">{articles.map((article) => (<li key={article.id}><AppLink href={`/articles/${article.id}`}>{article.title}</AppLink><span className="muted"> / {article.slug}</span></li>))}</ul></section></>}</div>
   )
+}
+
+function renderBlockHtml(block: Record<string, unknown>, articleTitleById: Record<number, string>): string {
+  const type = (block.type as string) ?? 'paragraph'
+  const data = (block.data as Record<string, unknown>) ?? {}
+  const rawText = typeof data.text === 'string' ? data.text : ''
+
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(`<div>${rawText}</div>`, 'text/html')
+  doc.querySelectorAll('a[data-article-id]').forEach((anchor) => {
+    const articleId = Number(anchor.getAttribute('data-article-id'))
+    if (!Number.isFinite(articleId)) {
+      return
+    }
+    const title = articleTitleById[articleId] || `Статья #${articleId}`
+    anchor.setAttribute('href', `/articles/${articleId}`)
+    anchor.setAttribute('target', '_blank')
+    anchor.setAttribute('rel', 'noopener noreferrer')
+    anchor.setAttribute('data-tooltip', title)
+    anchor.classList.add('wiki-link')
+  })
+
+  const html = doc.body.firstElementChild?.innerHTML ?? rawText
+  if (type === 'header') {
+    return `<h3>${html}</h3>`
+  }
+  return `<p>${html}</p>`
 }
 
 function ArticleViewPage({ articleId }: { articleId: number }) {
   const [article, setArticle] = useState<Article | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [articleTitleById, setArticleTitleById] = useState<Record<number, string>>({})
 
   useEffect(() => {
     const loadArticle = async () => {
       setLoading(true)
       setError(null)
       try {
-        setArticle(await api.getArticle(articleId))
+        const loadedArticle = await api.getArticle(articleId)
+        setArticle(loadedArticle)
+        const relatedArticles = await api.listJournalArticles(loadedArticle.journal_id)
+        setArticleTitleById(Object.fromEntries(relatedArticles.map((item) => [item.id, item.title])))
       } catch (loadError) {
         setError((loadError as Error).message)
       } finally {
@@ -357,6 +395,22 @@ function ArticleViewPage({ articleId }: { articleId: number }) {
 
     void loadArticle()
   }, [articleId])
+
+  const blockHtml = useMemo(() => {
+    if (!article) {
+      return []
+    }
+
+    const contentJson = article.content_json as OutputData
+    if (!contentJson?.blocks) {
+      return []
+    }
+
+    return contentJson.blocks.map((block, index) => ({
+      id: index,
+      html: renderBlockHtml(block, articleTitleById),
+    }))
+  }, [article, articleTitleById])
 
   return (
     <div className="page">
@@ -372,7 +426,15 @@ function ArticleViewPage({ articleId }: { articleId: number }) {
         <section className="card">
           <h1>{article.title}</h1>
           <p className="muted">/{article.slug}</p>
-          <pre className="content">{article.content_text || JSON.stringify(article.content_json, null, 2)}</pre>
+          {blockHtml.length > 0 ? (
+            <div className="content-rich">
+              {blockHtml.map((block) => (
+                <div key={block.id} dangerouslySetInnerHTML={{ __html: block.html }} />
+              ))}
+            </div>
+          ) : (
+            <pre className="content">{article.content_text || JSON.stringify(article.content_json, null, 2)}</pre>
+          )}
           <p>
             <AppLink href={`/articles/${article.id}/edit`}>Редактировать статью</AppLink>
           </p>
@@ -426,7 +488,7 @@ function ArticleEditPage({ articleId }: { articleId: number }) {
   }, [articleId])
 
   useEffect(() => {
-    if (loading || !contentJson) {
+    if (loading || !contentJson || !journalId) {
       return
     }
 
@@ -444,11 +506,12 @@ function ArticleEditPage({ articleId }: { articleId: number }) {
           holder: editorHolderId,
           data: contentJson,
           tools: {
-            paragraph: window.Paragraph,
-            header: window.Header,
-            list: window.List,
-            quote: window.Quote,
+            paragraph: { class: window.Paragraph, inlineToolbar: true },
+            header: { class: window.Header, inlineToolbar: true },
+            list: { class: window.List, inlineToolbar: true },
+            quote: { class: window.Quote, inlineToolbar: true },
             delimiter: window.Delimiter,
+            wikilink: { class: WikiLinkInlineTool, config: { journalId } },
           },
           onChange: markUnsaved,
         })
@@ -468,7 +531,7 @@ function ArticleEditPage({ articleId }: { articleId: number }) {
         void localEditor.destroy()
       }
     }
-  }, [loading, contentJson, editorHolderId])
+  }, [loading, contentJson, editorHolderId, journalId])
 
   useEffect(() => {
     const guard = () => {

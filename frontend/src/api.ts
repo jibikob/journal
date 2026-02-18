@@ -15,6 +15,11 @@ export type Article = {
   updated_at: string
 }
 
+export type ArticleSearchResult = {
+  id: number
+  title: string
+}
+
 export type ApiError = {
   detail?: string
 }
@@ -59,6 +64,8 @@ export const api = {
     }),
   getJournal: (journalId: number) => request<Journal>(`/journals/${journalId}`),
   listJournalArticles: (journalId: number) => request<Article[]>(`/journals/${journalId}/articles`),
+  searchJournalArticles: (journalId: number, query: string) =>
+    request<ArticleSearchResult[]>(`/journals/${journalId}/articles/search?q=${encodeURIComponent(query)}`),
   createArticle: (
     journalId: number,
     payload: { title: string; slug?: string; content_json?: Record<string, unknown> },
