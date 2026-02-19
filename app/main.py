@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
-from sqlalchemy import delete, func
+from sqlalchemy import case, delete, func, or_
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -172,13 +172,31 @@ def search_articles(journal_id: int, q: str = Query(default=""), db: Session = D
     if not db.get(Journal, journal_id):
         raise HTTPException(status_code=404, detail="Journal not found")
 
-    query = db.query(Article).filter(Article.journal_id == journal_id)
     search = q.strip()
-    if search:
-        like_pattern = f"%{search.lower()}%"
-        query = query.filter(func.lower(Article.title).like(like_pattern))
+    query = db.query(Article).filter(Article.journal_id == journal_id)
 
-    return query.order_by(Article.updated_at.desc(), Article.id.desc()).limit(20).all()
+    if search:
+        lowered_search = search.lower()
+        title_pattern = f"%{lowered_search}%"
+        starts_pattern = f"{lowered_search}%"
+        query = query.filter(
+            or_(
+                func.lower(Article.title).like(title_pattern),
+                func.lower(Article.content_text).like(title_pattern),
+            )
+        )
+
+        relevance = case(
+            (func.lower(Article.title).like(starts_pattern), 3),
+            (func.lower(Article.title).like(title_pattern), 2),
+            (func.lower(Article.content_text).like(title_pattern), 1),
+            else_=0,
+        )
+        query = query.order_by(relevance.desc(), Article.updated_at.desc(), Article.id.desc())
+    else:
+        query = query.order_by(Article.updated_at.desc(), Article.id.desc())
+
+    return query.limit(20).all()
 
 
 @app.post(

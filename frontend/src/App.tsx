@@ -344,6 +344,24 @@ function AppLink({ href, children }: { href: string; children: ReactNode }) {
   )
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\$&')
+}
+
+function renderHighlightedText(text: string, query: string): ReactNode {
+  const search = query.trim()
+  if (!search) {
+    return text
+  }
+
+  const pattern = new RegExp(`(${escapeRegExp(search)})`, 'ig')
+  const parts = text.split(pattern)
+
+  return parts.map((part, index) =>
+    part.toLowerCase() === search.toLowerCase() ? <mark key={`${part}-${index}`}>{part}</mark> : part,
+  )
+}
+
 function JournalsPage() { /* unchanged */
   const [journals, setJournals] = useState<Journal[]>([])
   const [loading, setLoading] = useState(true)
@@ -403,6 +421,9 @@ function JournalDetailsPage({ journalId }: { journalId: number }) {
   const [submitting, setSubmitting] = useState(false)
   const [sequenceMode, setSequenceMode] = useState(false)
   const [savingSequence, setSavingSequence] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<ArticleSearchResult[]>([])
+  const [searching, setSearching] = useState(false)
 
   const loadData = async () => {
     setLoading(true)
@@ -486,6 +507,20 @@ function JournalDetailsPage({ journalId }: { journalId: number }) {
     }
   }
 
+  const onSearchSubmit = async (event: FormEvent) => {
+    event.preventDefault()
+    setSearching(true)
+    setError(null)
+    try {
+      const results = await api.searchJournalArticles(journalId, searchQuery)
+      setSearchResults(results)
+    } catch (searchError) {
+      setError((searchError as Error).message)
+    } finally {
+      setSearching(false)
+    }
+  }
+
   return (
     <div className="page">
       <p>
@@ -519,6 +554,40 @@ function JournalDetailsPage({ journalId }: { journalId: number }) {
               </label>
               <button disabled={submitting}>{submitting ? 'Создание...' : 'Создать статью'}</button>
             </form>
+          </section>
+
+          <section className="card">
+            <h2>Поиск по статьям</h2>
+            <form onSubmit={onSearchSubmit} className="form-grid search-form">
+              <label>
+                Запрос
+                <input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Искать по заголовку и тексту"
+                />
+              </label>
+              <button type="submit" disabled={searching}>{searching ? 'Поиск...' : 'Найти'}</button>
+            </form>
+
+            {searchQuery.trim() && !searching && searchResults.length === 0 && (
+              <p className="info">Ничего не найдено.</p>
+            )}
+
+            {searchResults.length > 0 && (
+              <ul className="search-results">
+                {searchResults.map((article) => (
+                  <li key={article.id}>
+                    <AppLink href={`/articles/${article.id}`}>
+                      {renderHighlightedText(article.title, searchQuery)}
+                    </AppLink>
+                    <p className="muted search-snippet">
+                      {renderHighlightedText((article.content_text || '').slice(0, 180), searchQuery)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
 
           <section className="card">

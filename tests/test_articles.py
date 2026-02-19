@@ -129,22 +129,32 @@ def test_update_article_refreshes_updated_at_and_content():
     assert links[0][2] == "new anchor"
 
 
-def test_search_articles_endpoint_returns_journal_matches():
+def test_search_articles_endpoint_returns_ranked_matches_from_title_and_content():
     journal_resp = client.post("/api/journals", json={"title": "Search Journal"})
     journal_id = journal_resp.json()["id"]
 
-    client.post(f"/api/journals/{journal_id}/articles", json={"title": "Alpha"})
-    client.post(f"/api/journals/{journal_id}/articles", json={"title": "Beta"})
+    title_match = client.post(
+        f"/api/journals/{journal_id}/articles",
+        json={"title": "Alpha title", "content_json": {"blocks": [{"type": "paragraph", "data": {"text": "misc"}}]}},
+    ).json()
+    content_match = client.post(
+        f"/api/journals/{journal_id}/articles",
+        json={
+            "title": "Gamma",
+            "content_json": {"blocks": [{"type": "paragraph", "data": {"text": "contains alpha token"}}]},
+        },
+    ).json()
 
     other_journal = client.post("/api/journals", json={"title": "Other Journal"}).json()
     client.post(f"/api/journals/{other_journal['id']}/articles", json={"title": "Alpha Other"})
 
-    response = client.get(f"/api/journals/{journal_id}/articles/search?q=alp")
+    response = client.get(f"/api/journals/{journal_id}/articles/search?q=alpha")
     assert response.status_code == 200
 
     data = response.json()
-    assert len(data) == 1
-    assert data[0]["title"] == "Alpha"
+    assert [item["id"] for item in data] == [title_match["id"], content_match["id"]]
+    assert data[0]["title"] == "Alpha title"
+    assert "alpha" in data[1]["content_text"].lower()
 
 
 def test_extract_index_entries():
