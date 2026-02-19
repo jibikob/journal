@@ -45,6 +45,7 @@ class Article(Base):
         foreign_keys="ArticleLink.to_article_id",
         cascade="all, delete-orphan",
     )
+    sequence_entries = relationship("ArticleSequence", back_populates="article", cascade="all, delete-orphan")
 
 
 class ArticleLink(Base):
@@ -59,3 +60,19 @@ class ArticleLink(Base):
 
     from_article = relationship("Article", foreign_keys=[from_article_id], back_populates="outgoing_links")
     to_article = relationship("Article", foreign_keys=[to_article_id], back_populates="incoming_links")
+
+
+class ArticleSequence(Base):
+    __tablename__ = "article_sequence"
+    __table_args__ = (
+        UniqueConstraint("journal_id", "article_id", name="uq_article_sequence_journal_article"),
+        UniqueConstraint("journal_id", "position", name="uq_article_sequence_journal_position"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    journal_id = Column(Integer, ForeignKey("journals.id", ondelete="CASCADE"), nullable=False, index=True)
+    article_id = Column(Integer, ForeignKey("articles.id", ondelete="CASCADE"), nullable=False, index=True)
+    position = Column(Integer, nullable=False)
+
+    journal = relationship("Journal")
+    article = relationship("Article", back_populates="sequence_entries")

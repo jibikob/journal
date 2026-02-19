@@ -51,6 +51,18 @@ class ArticleUpdate(BaseModel):
 
 
 
+class SequenceUpdate(BaseModel):
+    article_ids: list[int] = Field(default_factory=list)
+
+
+class SequenceOut(BaseModel):
+    article_ids: list[int]
+
+
+class ArticleNeighborsOut(BaseModel):
+    prev_article_id: int | None = None
+    next_article_id: int | None = None
+
 
 class ArticleSearchOut(BaseModel):
     id: int

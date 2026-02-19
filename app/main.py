@@ -6,15 +6,18 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
-from .models import Article, ArticleLink, Journal
+from .models import Article, ArticleLink, ArticleSequence, Journal
 from .schemas import (
     ArticleCreate,
+    ArticleNeighborsOut,
     ArticleOut,
     ArticleSearchOut,
     ArticleUpdate,
     JournalCreate,
     JournalOut,
     JournalUpdate,
+    SequenceOut,
+    SequenceUpdate,
 )
 from .utils import extract_editorjs_text, extract_index_entries, extract_wiki_links, slugify
 
@@ -124,6 +127,46 @@ def list_articles(journal_id: int, db: Session = Depends(get_db)):
     return db.query(Article).filter(Article.journal_id == journal_id).order_by(Article.id).all()
 
 
+@app.get("/api/journals/{journal_id}/sequence", response_model=SequenceOut)
+def get_journal_sequence(journal_id: int, db: Session = Depends(get_db)):
+    if not db.get(Journal, journal_id):
+        raise HTTPException(status_code=404, detail="Journal not found")
+
+    rows = (
+        db.query(ArticleSequence)
+        .filter(ArticleSequence.journal_id == journal_id)
+        .order_by(ArticleSequence.position.asc(), ArticleSequence.id.asc())
+        .all()
+    )
+    return SequenceOut(article_ids=[row.article_id for row in rows])
+
+
+@app.post("/api/journals/{journal_id}/sequence", response_model=SequenceOut)
+def set_journal_sequence(journal_id: int, payload: SequenceUpdate, db: Session = Depends(get_db)):
+    if not db.get(Journal, journal_id):
+        raise HTTPException(status_code=404, detail="Journal not found")
+
+    article_ids = payload.article_ids
+    if len(set(article_ids)) != len(article_ids):
+        raise HTTPException(status_code=400, detail="Sequence contains duplicate article ids")
+
+    if article_ids:
+        count = (
+            db.query(Article)
+            .filter(Article.journal_id == journal_id, Article.id.in_(article_ids))
+            .count()
+        )
+        if count != len(article_ids):
+            raise HTTPException(status_code=400, detail="Sequence contains articles outside the journal")
+
+    db.execute(delete(ArticleSequence).where(ArticleSequence.journal_id == journal_id))
+    for index, article_id in enumerate(article_ids):
+        db.add(ArticleSequence(journal_id=journal_id, article_id=article_id, position=index))
+
+    db.commit()
+    return SequenceOut(article_ids=article_ids)
+
+
 @app.get("/api/journals/{journal_id}/articles/search", response_model=list[ArticleSearchOut])
 def search_articles(journal_id: int, q: str = Query(default=""), db: Session = Depends(get_db)):
     if not db.get(Journal, journal_id):
@@ -214,6 +257,43 @@ def update_article(article_id: int, payload: ArticleUpdate, db: Session = Depend
     db.commit()
     db.refresh(article)
     return article
+
+
+@app.get("/api/articles/{article_id}/neighbors", response_model=ArticleNeighborsOut)
+def get_article_neighbors(article_id: int, db: Session = Depends(get_db)):
+    article = db.get(Article, article_id)
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    current = (
+        db.query(ArticleSequence)
+        .filter(ArticleSequence.journal_id == article.journal_id, ArticleSequence.article_id == article_id)
+        .first()
+    )
+    if not current:
+        return ArticleNeighborsOut(prev_article_id=None, next_article_id=None)
+
+    prev_entry = (
+        db.query(ArticleSequence)
+        .filter(
+            ArticleSequence.journal_id == article.journal_id,
+            ArticleSequence.position == current.position - 1,
+        )
+        .first()
+    )
+    next_entry = (
+        db.query(ArticleSequence)
+        .filter(
+            ArticleSequence.journal_id == article.journal_id,
+            ArticleSequence.position == current.position + 1,
+        )
+        .first()
+    )
+
+    return ArticleNeighborsOut(
+        prev_article_id=prev_entry.article_id if prev_entry else None,
+        next_article_id=next_entry.article_id if next_entry else None,
+    )
 
 
 @app.delete("/api/articles/{article_id}", status_code=status.HTTP_204_NO_CONTENT)
