@@ -248,3 +248,36 @@ def test_article_sequence_rejects_foreign_or_duplicate_ids():
         json={"article_ids": [own_article["id"], foreign_article["id"]]},
     )
     assert foreign_resp.status_code == 400
+
+
+def test_upload_image_accepts_valid_file_and_serves_it():
+    response = client.post(
+        "/api/uploads/image",
+        files={"file": ("test.png", b"\x89PNG\r\n\x1a\ncontent", "image/png")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["url"].startswith("http://testserver/uploads/")
+
+    served = client.get(data["url"].replace("http://testserver", ""))
+    assert served.status_code == 200
+    assert served.content == b"\x89PNG\r\n\x1a\ncontent"
+
+
+def test_upload_image_rejects_invalid_type():
+    response = client.post(
+        "/api/uploads/image",
+        files={"file": ("test.txt", b"hello", "text/plain")},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unsupported image type"
+
+
+def test_upload_image_rejects_oversized_file():
+    response = client.post(
+        "/api/uploads/image",
+        files={"file": ("large.png", b"a" * (5 * 1024 * 1024 + 1), "image/png")},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Image too large"

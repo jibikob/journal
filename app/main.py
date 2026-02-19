@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from sqlalchemy import case, delete, func, or_
@@ -24,6 +26,13 @@ from .utils import extract_editorjs_text, extract_index_entries, extract_wiki_li
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Journal API")
+
+UPLOAD_DIR = Path("uploads")
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 
 def sync_article_links(db: Session, article: Article) -> None:
@@ -58,6 +67,33 @@ def sync_article_links(db: Session, article: Article) -> None:
         set_={"anchor": insert_stmt.excluded.anchor},
     )
     db.execute(upsert_stmt)
+
+
+@app.post("/api/uploads/image")
+async def upload_image(request: Request, file: UploadFile = File(...)):
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported image type")
+
+    content = await file.read()
+    if len(content) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=400, detail="Image too large")
+
+    extension = Path(file.filename or "").suffix.lower()
+    if extension not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+        content_type_extensions = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+        }
+        extension = content_type_extensions.get(file.content_type, ".bin")
+
+    filename = f"{uuid4().hex}{extension}"
+    destination = UPLOAD_DIR / filename
+    destination.write_bytes(content)
+
+    public_url = str(request.base_url).rstrip("/") + f"/uploads/{filename}"
+    return {"url": public_url}
 
 
 @app.get("/api/journals", response_model=list[JournalOut])
