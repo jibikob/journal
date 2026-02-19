@@ -20,6 +20,7 @@ export type Article = {
 export type ArticleSearchResult = {
   id: number
   title: string
+  content_text: string
 }
 
 export type ArticleNeighbors = {
