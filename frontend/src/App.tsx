@@ -55,6 +55,7 @@ declare global {
     Quote?: unknown
     Delimiter?: unknown
     Paragraph?: unknown
+    ImageTool?: unknown
   }
 }
 
@@ -241,6 +242,7 @@ const EDITOR_SCRIPTS = [
   'https://cdn.jsdelivr.net/npm/@editorjs/quote@2.7.6/dist/quote.umd.min.js',
   'https://cdn.jsdelivr.net/npm/@editorjs/delimiter@1.4.2/dist/delimiter.umd.min.js',
   'https://cdn.jsdelivr.net/npm/@editorjs/paragraph@2.11.6/dist/paragraph.umd.min.js',
+  'https://cdn.jsdelivr.net/npm/@editorjs/image@2.10.3/dist/image.umd.min.js',
 ]
 
 let editorScriptsPromise: Promise<void> | null = null
@@ -783,6 +785,20 @@ function ArticleEditPage({ articleId }: { articleId: number }) {
             list: { class: window.List, inlineToolbar: true },
             quote: { class: window.Quote, inlineToolbar: true },
             delimiter: window.Delimiter,
+            image: {
+              class: window.ImageTool,
+              config: {
+                uploader: {
+                  uploadByFile: async (file: File) => {
+                    const result = await api.uploadImage(file)
+                    return {
+                      success: 1,
+                      file: { url: result.url },
+                    }
+                  },
+                },
+              },
+            },
             wikilink: { class: WikiLinkInlineTool, config: { journalId } },
             indexList: { class: IndexListTool, config: { journalId } },
           },
