@@ -22,6 +22,7 @@ class JournalUpdate(BaseModel):
 
 class JournalOut(BaseModel):
     id: int
+    owner_id: int
     title: str
     slug: str
     description: str | None = None
@@ -75,6 +76,7 @@ class ArticleSearchOut(BaseModel):
 
 class ArticleOut(BaseModel):
     id: int
+    owner_id: int
     journal_id: int
     title: str
     slug: str

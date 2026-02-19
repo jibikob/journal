@@ -27,7 +27,7 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 
-client = TestClient(app)
+client = TestClient(app, headers={"X-User-Id": "1"})
 
 
 def setup_function():
@@ -281,3 +281,31 @@ def test_upload_image_rejects_oversized_file():
     )
     assert response.status_code == 400
     assert response.json()["detail"] == "Image too large"
+
+
+def test_journals_and_articles_are_scoped_by_user():
+    user1_client = TestClient(app, headers={"X-User-Id": "1"})
+    user2_client = TestClient(app, headers={"X-User-Id": "2"})
+
+    journal1 = user1_client.post("/api/journals", json={"title": "User1 journal"}).json()
+    journal2 = user2_client.post("/api/journals", json={"title": "User2 journal"}).json()
+
+    user1_client.post(f"/api/journals/{journal1['id']}/articles", json={"title": "Owned by 1"})
+    user2_client.post(f"/api/journals/{journal2['id']}/articles", json={"title": "Owned by 2"})
+
+    user1_journals = user1_client.get("/api/journals")
+    user2_journals = user2_client.get("/api/journals")
+
+    assert user1_journals.status_code == 200
+    assert user2_journals.status_code == 200
+    assert [item["id"] for item in user1_journals.json()] == [journal1["id"]]
+    assert [item["id"] for item in user2_journals.json()] == [journal2["id"]]
+
+    forbidden = user1_client.get(f"/api/journals/{journal2['id']}")
+    assert forbidden.status_code == 404
+
+
+def test_missing_user_header_is_rejected():
+    raw_client = TestClient(app)
+    response = raw_client.get("/api/journals")
+    assert response.status_code == 401

@@ -1,5 +1,6 @@
 export type Journal = {
   id: number
+  owner_id: number
   title: string
   slug: string
   description: string | null
@@ -7,6 +8,7 @@ export type Journal = {
 
 export type Article = {
   id: number
+  owner_id: number
   journal_id: number
   title: string
   slug: string
@@ -36,12 +38,26 @@ export type ApiError = {
   detail?: string
 }
 
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
+const DEV_USER_KEY = 'dev.currentUserId'
+
+function getCurrentUserId(): string {
+  const stored = window.localStorage.getItem(DEV_USER_KEY)
+  if (stored && /^\d+$/.test(stored) && Number(stored) > 0) {
+    return stored
+  }
+
+  const fallback = '1'
+  window.localStorage.setItem(DEV_USER_KEY, fallback)
+  return fallback
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
       'Content-Type': 'application/json',
+      'X-User-Id': getCurrentUserId(),
       ...(init?.headers ?? {}),
     },
     ...init,
@@ -109,6 +125,9 @@ export const api = {
 
     const response = await fetch(`${API_BASE.replace(/\/api$/, '')}/api/uploads/image`, {
       method: 'POST',
+      headers: {
+        'X-User-Id': getCurrentUserId(),
+      },
       body: formData,
     })
 
