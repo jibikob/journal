@@ -16,7 +16,7 @@ from .schemas import (
     JournalOut,
     JournalUpdate,
 )
-from .utils import extract_editorjs_text, extract_wiki_links, slugify
+from .utils import extract_editorjs_text, extract_index_entries, extract_wiki_links, slugify
 
 Base.metadata.create_all(bind=engine)
 
@@ -25,10 +25,19 @@ app = FastAPI(title="Journal API")
 
 def sync_article_links(db: Session, article: Article) -> None:
     links = extract_wiki_links(article.content_json)
+    for entry in article.index_entries or []:
+        article_id = entry.get("article_id")
+        if isinstance(article_id, int):
+            links.append({"to_article_id": article_id, "anchor": entry.get("title") or f"Article #{article_id}"})
+
+    deduped: dict[tuple[int, str], dict[str, int | str]] = {}
+    for link in links:
+        key = (link["to_article_id"], link["anchor"])
+        deduped[key] = link
 
     db.execute(delete(ArticleLink).where(ArticleLink.from_article_id == article.id))
 
-    if not links:
+    if not deduped:
         return
 
     rows = [
@@ -37,7 +46,7 @@ def sync_article_links(db: Session, article: Article) -> None:
             "to_article_id": link["to_article_id"],
             "anchor": link["anchor"],
         }
-        for link in links
+        for link in deduped.values()
     ]
 
     insert_stmt = sqlite_insert(ArticleLink).values(rows)
@@ -142,12 +151,15 @@ def create_article(journal_id: int, payload: ArticleCreate, db: Session = Depend
     if db.query(Article).filter(Article.slug == slug).first():
         raise HTTPException(status_code=400, detail="Article slug already exists")
 
+    extracted_index_entries = extract_index_entries(payload.content_json)
     article = Article(
         journal_id=journal_id,
         title=payload.title,
         slug=slug,
         content_json=payload.content_json,
         content_text=extract_editorjs_text(payload.content_json),
+        is_index=payload.is_index if payload.is_index is not None else bool(extracted_index_entries),
+        index_entries=payload.index_entries if payload.index_entries is not None else extracted_index_entries,
         updated_at=datetime.now(timezone.utc),
     )
     db.add(article)
@@ -186,8 +198,17 @@ def update_article(article_id: int, payload: ArticleUpdate, db: Session = Depend
     if payload.content_json is not None:
         article.content_json = payload.content_json
         article.content_text = extract_editorjs_text(payload.content_json)
-        sync_article_links(db, article)
+        extracted_index_entries = extract_index_entries(payload.content_json)
+        article.index_entries = payload.index_entries if payload.index_entries is not None else extracted_index_entries
+        article.is_index = payload.is_index if payload.is_index is not None else bool(article.index_entries)
 
+    if payload.index_entries is not None:
+        article.index_entries = payload.index_entries
+
+    if payload.is_index is not None:
+        article.is_index = payload.is_index
+
+    sync_article_links(db, article)
     article.updated_at = datetime.now(timezone.utc)
 
     db.commit()

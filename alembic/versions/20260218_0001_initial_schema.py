@@ -38,6 +38,8 @@ def upgrade() -> None:
         sa.Column("slug", sa.String(length=255), nullable=False),
         sa.Column("content_json", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("content_text", sa.Text(), nullable=False),
+        sa.Column("is_index", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.Column("index_entries", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'[]'::jsonb")),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.ForeignKeyConstraint(["journal_id"], ["journals.id"], name=op.f("fk_articles_journal_id_journals"), ondelete="CASCADE"),

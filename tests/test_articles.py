@@ -5,7 +5,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
-from app.utils import extract_editorjs_text, extract_wiki_links
+from app.utils import extract_editorjs_text, extract_index_entries, extract_wiki_links
 
 SQLALCHEMY_DATABASE_URL = "sqlite://"
 engine = create_engine(
@@ -145,3 +145,49 @@ def test_search_articles_endpoint_returns_journal_matches():
     data = response.json()
     assert len(data) == 1
     assert data[0]["title"] == "Alpha"
+
+
+def test_extract_index_entries():
+    content = {
+        "blocks": [
+            {
+                "type": "indexList",
+                "data": {"entries": [{"articleId": 2, "title": "Target 2"}, {"articleId": 3, "title": "Target 3"}]},
+            }
+        ]
+    }
+
+    assert extract_index_entries(content) == [
+        {"article_id": 2, "title": "Target 2"},
+        {"article_id": 3, "title": "Target 3"},
+    ]
+
+
+def test_index_blocks_set_is_index_and_sync_links():
+    journal_resp = client.post("/api/journals", json={"title": "Index Journal"})
+    journal_id = journal_resp.json()["id"]
+
+    article_resp = client.post(
+        f"/api/journals/{journal_id}/articles",
+        json={
+            "title": "Index page",
+            "content_json": {
+                "blocks": [
+                    {
+                        "type": "indexList",
+                        "data": {"entries": [{"articleId": 123, "title": "Entry 123"}]},
+                    }
+                ]
+            },
+        },
+    )
+    assert article_resp.status_code == 201
+    data = article_resp.json()
+    assert data["is_index"] is True
+    assert data["index_entries"] == [{"article_id": 123, "title": "Entry 123"}]
+
+    with engine.connect() as conn:
+        links = conn.execute(text("SELECT from_article_id, to_article_id FROM article_links")).fetchall()
+
+    assert len(links) == 1
+    assert links[0][1] == 123

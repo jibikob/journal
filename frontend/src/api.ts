@@ -12,6 +12,8 @@ export type Article = {
   slug: string
   content_json: Record<string, unknown>
   content_text: string
+  is_index: boolean
+  index_entries: Array<{ article_id: number; title?: string }>
   updated_at: string
 }
 

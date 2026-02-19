@@ -96,3 +96,35 @@ def extract_wiki_links(content_json: dict[str, Any] | None) -> list[dict[str, An
         deduped[key] = link
 
     return list(deduped.values())
+
+
+def extract_index_entries(content_json: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not content_json:
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for block in content_json.get("blocks", []):
+        if block.get("type") != "indexList":
+            continue
+
+        data = block.get("data") or {}
+        block_entries = data.get("entries")
+        if not isinstance(block_entries, list):
+            continue
+
+        for item in block_entries:
+            if not isinstance(item, dict):
+                continue
+
+            article_id = item.get("articleId")
+            if not isinstance(article_id, int):
+                continue
+
+            title = item.get("title") if isinstance(item.get("title"), str) else ""
+            entries.append({"article_id": article_id, "title": title})
+
+    deduped: dict[int, dict[str, Any]] = {}
+    for entry in entries:
+        deduped[entry["article_id"]] = entry
+
+    return list(deduped.values())

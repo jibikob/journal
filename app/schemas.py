@@ -34,6 +34,8 @@ class ArticleBase(BaseModel):
     title: str
     slug: str | None = None
     content_json: dict[str, Any] = Field(default_factory=dict)
+    is_index: bool | None = None
+    index_entries: list[dict[str, Any]] | None = None
 
 
 class ArticleCreate(ArticleBase):
@@ -44,6 +46,8 @@ class ArticleUpdate(BaseModel):
     title: str | None = None
     slug: str | None = None
     content_json: dict[str, Any] | None = None
+    is_index: bool | None = None
+    index_entries: list[dict[str, Any]] | None = None
 
 
 
@@ -63,6 +67,8 @@ class ArticleOut(BaseModel):
     slug: str
     content_json: dict[str, Any]
     content_text: str
+    is_index: bool
+    index_entries: list[dict[str, Any]]
     updated_at: datetime
 
     class Config:
