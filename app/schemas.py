@@ -68,6 +68,7 @@ class ArticleNeighborsOut(BaseModel):
 class ArticleSearchOut(BaseModel):
     id: int
     title: str
+    content_text: str
 
     class Config:
         from_attributes = True

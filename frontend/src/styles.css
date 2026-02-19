@@ -218,3 +218,20 @@ button:disabled {
   display: flex;
   justify-content: space-between;
 }
+
+.search-results {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 10px;
+}
+
+.search-snippet {
+  margin: 4px 0 0;
+}
+
+mark {
+  background: #fef08a;
+  padding: 0 2px;
+  border-radius: 3px;
+}
