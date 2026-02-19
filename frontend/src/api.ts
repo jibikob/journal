@@ -102,4 +102,28 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
+  uploadImage: async (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const response = await fetch(`${API_BASE.replace(/\/api$/, '')}/api/uploads/image`, {
+      method: 'POST',
+      body: formData,
+    })
+
+    if (!response.ok) {
+      let detail = `Request failed (${response.status})`
+      try {
+        const data = (await response.json()) as ApiError
+        if (data?.detail) {
+          detail = data.detail
+        }
+      } catch {
+        // ignore non-json error payloads
+      }
+      throw new Error(detail)
+    }
+
+    return (await response.json()) as { url: string }
+  },
 }
