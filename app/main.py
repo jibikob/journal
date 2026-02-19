@@ -3,13 +3,14 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import delete, func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from .database import Base, engine, get_db
-from .models import Article, ArticleLink, ArticleSequence, Journal
+from .database import Base, SessionLocal, engine, get_db
+from .models import Article, ArticleLink, ArticleSequence, Journal, User
 from .schemas import (
     ArticleCreate,
     ArticleNeighborsOut,
@@ -34,6 +35,41 @@ MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+
+@app.middleware("http")
+async def load_current_user(request: Request, call_next):
+    if request.url.path.startswith("/api"):
+        raw_user_id = request.headers.get("X-User-Id")
+        if raw_user_id is None:
+            return JSONResponse(status_code=401, content={"detail": "X-User-Id header is required"})
+
+        try:
+            user_id = int(raw_user_id)
+            if user_id < 1:
+                raise ValueError
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "X-User-Id must be a positive integer"})
+
+        db = SessionLocal()
+        try:
+            user = db.get(User, user_id)
+            if user is None:
+                user = User(id=user_id, email=f"dev+{user_id}@local")
+                db.add(user)
+                db.commit()
+            request.state.current_user_id = user.id
+        finally:
+            db.close()
+
+    return await call_next(request)
+
+
+def get_current_user_id(request: Request) -> int:
+    current_user_id = getattr(request.state, "current_user_id", None)
+    if current_user_id is None:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return current_user_id
 
 
 def sync_article_links(db: Session, article: Article) -> None:
@@ -98,17 +134,17 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
 
 
 @app.get("/api/journals", response_model=list[JournalOut])
-def list_journals(db: Session = Depends(get_db)):
-    return db.query(Journal).order_by(Journal.id).all()
+def list_journals(db: Session = Depends(get_db), current_user_id: int = Depends(get_current_user_id)):
+    return db.query(Journal).filter(Journal.owner_id == current_user_id).order_by(Journal.id).all()
 
 
 @app.post("/api/journals", response_model=JournalOut, status_code=status.HTTP_201_CREATED)
-def create_journal(payload: JournalCreate, db: Session = Depends(get_db)):
+def create_journal(payload: JournalCreate, db: Session = Depends(get_db), current_user_id: int = Depends(get_current_user_id)):
     slug = payload.slug or slugify(payload.title)
-    if db.query(Journal).filter(Journal.slug == slug).first():
+    if db.query(Journal).filter(Journal.slug == slug, Journal.owner_id == current_user_id).first():
         raise HTTPException(status_code=400, detail="Journal slug already exists")
 
-    journal = Journal(title=payload.title, slug=slug, description=payload.description)
+    journal = Journal(owner_id=current_user_id, title=payload.title, slug=slug, description=payload.description)
     db.add(journal)
     db.commit()
     db.refresh(journal)
@@ -116,16 +152,21 @@ def create_journal(payload: JournalCreate, db: Session = Depends(get_db)):
 
 
 @app.get("/api/journals/{journal_id}", response_model=JournalOut)
-def get_journal(journal_id: int, db: Session = Depends(get_db)):
-    journal = db.get(Journal, journal_id)
+def get_journal(journal_id: int, db: Session = Depends(get_db), current_user_id: int = Depends(get_current_user_id)):
+    journal = db.query(Journal).filter(Journal.id == journal_id, Journal.owner_id == current_user_id).first()
     if not journal:
         raise HTTPException(status_code=404, detail="Journal not found")
     return journal
 
 
 @app.patch("/api/journals/{journal_id}", response_model=JournalOut)
-def update_journal(journal_id: int, payload: JournalUpdate, db: Session = Depends(get_db)):
-    journal = db.get(Journal, journal_id)
+def update_journal(
+    journal_id: int,
+    payload: JournalUpdate,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    journal = db.query(Journal).filter(Journal.id == journal_id, Journal.owner_id == current_user_id).first()
     if not journal:
         raise HTTPException(status_code=404, detail="Journal not found")
 
@@ -134,7 +175,11 @@ def update_journal(journal_id: int, payload: JournalUpdate, db: Session = Depend
 
     if payload.slug is not None or (payload.slug is None and payload.title is not None):
         new_slug = payload.slug or slugify(journal.title)
-        exists = db.query(Journal).filter(Journal.slug == new_slug, Journal.id != journal.id).first()
+        exists = (
+            db.query(Journal)
+            .filter(Journal.slug == new_slug, Journal.owner_id == current_user_id, Journal.id != journal.id)
+            .first()
+        )
         if exists:
             raise HTTPException(status_code=400, detail="Journal slug already exists")
         journal.slug = new_slug
@@ -148,8 +193,12 @@ def update_journal(journal_id: int, payload: JournalUpdate, db: Session = Depend
 
 
 @app.delete("/api/journals/{journal_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_journal(journal_id: int, db: Session = Depends(get_db)):
-    journal = db.get(Journal, journal_id)
+def delete_journal(
+    journal_id: int,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    journal = db.query(Journal).filter(Journal.id == journal_id, Journal.owner_id == current_user_id).first()
     if not journal:
         raise HTTPException(status_code=404, detail="Journal not found")
     db.delete(journal)
@@ -158,20 +207,35 @@ def delete_journal(journal_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/journals/{journal_id}/articles", response_model=list[ArticleOut])
-def list_articles(journal_id: int, db: Session = Depends(get_db)):
-    if not db.get(Journal, journal_id):
+def list_articles(
+    journal_id: int,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    journal = db.query(Journal).filter(Journal.id == journal_id, Journal.owner_id == current_user_id).first()
+    if not journal:
         raise HTTPException(status_code=404, detail="Journal not found")
-    return db.query(Article).filter(Article.journal_id == journal_id).order_by(Article.id).all()
+    return (
+        db.query(Article)
+        .filter(Article.journal_id == journal_id, Article.owner_id == current_user_id)
+        .order_by(Article.id)
+        .all()
+    )
 
 
 @app.get("/api/journals/{journal_id}/sequence", response_model=SequenceOut)
-def get_journal_sequence(journal_id: int, db: Session = Depends(get_db)):
-    if not db.get(Journal, journal_id):
+def get_journal_sequence(
+    journal_id: int,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    if not db.query(Journal).filter(Journal.id == journal_id, Journal.owner_id == current_user_id).first():
         raise HTTPException(status_code=404, detail="Journal not found")
 
     rows = (
         db.query(ArticleSequence)
-        .filter(ArticleSequence.journal_id == journal_id)
+        .join(Article, Article.id == ArticleSequence.article_id)
+        .filter(ArticleSequence.journal_id == journal_id, Article.owner_id == current_user_id)
         .order_by(ArticleSequence.position.asc(), ArticleSequence.id.asc())
         .all()
     )
@@ -179,8 +243,13 @@ def get_journal_sequence(journal_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/api/journals/{journal_id}/sequence", response_model=SequenceOut)
-def set_journal_sequence(journal_id: int, payload: SequenceUpdate, db: Session = Depends(get_db)):
-    if not db.get(Journal, journal_id):
+def set_journal_sequence(
+    journal_id: int,
+    payload: SequenceUpdate,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    if not db.query(Journal).filter(Journal.id == journal_id, Journal.owner_id == current_user_id).first():
         raise HTTPException(status_code=404, detail="Journal not found")
 
     article_ids = payload.article_ids
@@ -190,7 +259,7 @@ def set_journal_sequence(journal_id: int, payload: SequenceUpdate, db: Session =
     if article_ids:
         count = (
             db.query(Article)
-            .filter(Article.journal_id == journal_id, Article.id.in_(article_ids))
+            .filter(Article.journal_id == journal_id, Article.owner_id == current_user_id, Article.id.in_(article_ids))
             .count()
         )
         if count != len(article_ids):
@@ -205,11 +274,16 @@ def set_journal_sequence(journal_id: int, payload: SequenceUpdate, db: Session =
 
 
 @app.get("/api/journals/{journal_id}/articles/search", response_model=list[ArticleSearchOut])
-def search_articles(journal_id: int, q: str = Query(default=""), db: Session = Depends(get_db)):
-    if not db.get(Journal, journal_id):
+def search_articles(
+    journal_id: int,
+    q: str = Query(default=""),
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    if not db.query(Journal).filter(Journal.id == journal_id, Journal.owner_id == current_user_id).first():
         raise HTTPException(status_code=404, detail="Journal not found")
 
-    query = db.query(Article).filter(Article.journal_id == journal_id)
+    query = db.query(Article).filter(Article.journal_id == journal_id, Article.owner_id == current_user_id)
     search = q.strip()
     if search:
         like_pattern = f"%{search.lower()}%"
@@ -223,16 +297,22 @@ def search_articles(journal_id: int, q: str = Query(default=""), db: Session = D
     response_model=ArticleOut,
     status_code=status.HTTP_201_CREATED,
 )
-def create_article(journal_id: int, payload: ArticleCreate, db: Session = Depends(get_db)):
-    if not db.get(Journal, journal_id):
+def create_article(
+    journal_id: int,
+    payload: ArticleCreate,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    if not db.query(Journal).filter(Journal.id == journal_id, Journal.owner_id == current_user_id).first():
         raise HTTPException(status_code=404, detail="Journal not found")
 
     slug = payload.slug or slugify(payload.title)
-    if db.query(Article).filter(Article.slug == slug).first():
+    if db.query(Article).filter(Article.slug == slug, Article.owner_id == current_user_id).first():
         raise HTTPException(status_code=400, detail="Article slug already exists")
 
     extracted_index_entries = extract_index_entries(payload.content_json)
     article = Article(
+        owner_id=current_user_id,
         journal_id=journal_id,
         title=payload.title,
         slug=slug,
@@ -252,16 +332,25 @@ def create_article(journal_id: int, payload: ArticleCreate, db: Session = Depend
 
 
 @app.get("/api/articles/{article_id}", response_model=ArticleOut)
-def get_article(article_id: int, db: Session = Depends(get_db)):
-    article = db.get(Article, article_id)
+def get_article(
+    article_id: int,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    article = db.query(Article).filter(Article.id == article_id, Article.owner_id == current_user_id).first()
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
     return article
 
 
 @app.patch("/api/articles/{article_id}", response_model=ArticleOut)
-def update_article(article_id: int, payload: ArticleUpdate, db: Session = Depends(get_db)):
-    article = db.get(Article, article_id)
+def update_article(
+    article_id: int,
+    payload: ArticleUpdate,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    article = db.query(Article).filter(Article.id == article_id, Article.owner_id == current_user_id).first()
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
 
@@ -270,7 +359,11 @@ def update_article(article_id: int, payload: ArticleUpdate, db: Session = Depend
 
     if payload.slug is not None or (payload.slug is None and payload.title is not None):
         new_slug = payload.slug or slugify(article.title)
-        exists = db.query(Article).filter(Article.slug == new_slug, Article.id != article.id).first()
+        exists = (
+            db.query(Article)
+            .filter(Article.slug == new_slug, Article.owner_id == current_user_id, Article.id != article.id)
+            .first()
+        )
         if exists:
             raise HTTPException(status_code=400, detail="Article slug already exists")
         article.slug = new_slug
@@ -297,8 +390,12 @@ def update_article(article_id: int, payload: ArticleUpdate, db: Session = Depend
 
 
 @app.get("/api/articles/{article_id}/neighbors", response_model=ArticleNeighborsOut)
-def get_article_neighbors(article_id: int, db: Session = Depends(get_db)):
-    article = db.get(Article, article_id)
+def get_article_neighbors(
+    article_id: int,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    article = db.query(Article).filter(Article.id == article_id, Article.owner_id == current_user_id).first()
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
 
@@ -312,17 +409,21 @@ def get_article_neighbors(article_id: int, db: Session = Depends(get_db)):
 
     prev_entry = (
         db.query(ArticleSequence)
+        .join(Article, Article.id == ArticleSequence.article_id)
         .filter(
             ArticleSequence.journal_id == article.journal_id,
             ArticleSequence.position == current.position - 1,
+            Article.owner_id == current_user_id,
         )
         .first()
     )
     next_entry = (
         db.query(ArticleSequence)
+        .join(Article, Article.id == ArticleSequence.article_id)
         .filter(
             ArticleSequence.journal_id == article.journal_id,
             ArticleSequence.position == current.position + 1,
+            Article.owner_id == current_user_id,
         )
         .first()
     )
@@ -334,8 +435,12 @@ def get_article_neighbors(article_id: int, db: Session = Depends(get_db)):
 
 
 @app.delete("/api/articles/{article_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_article(article_id: int, db: Session = Depends(get_db)):
-    article = db.get(Article, article_id)
+def delete_article(
+    article_id: int,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
+    article = db.query(Article).filter(Article.id == article_id, Article.owner_id == current_user_id).first()
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
 

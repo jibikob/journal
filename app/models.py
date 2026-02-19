@@ -12,17 +12,31 @@ class Journal(Base):
     __tablename__ = "journals"
 
     id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     slug = Column(String(255), nullable=False, unique=True, index=True)
     description = Column(Text, nullable=True)
 
+    owner = relationship("User", back_populates="journals")
     articles = relationship("Article", back_populates="journal", cascade="all, delete-orphan")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), nullable=False, unique=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    journals = relationship("Journal", back_populates="owner", cascade="all, delete-orphan")
+    articles = relationship("Article", back_populates="owner", cascade="all, delete-orphan")
 
 
 class Article(Base):
     __tablename__ = "articles"
 
     id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     journal_id = Column(Integer, ForeignKey("journals.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     slug = Column(String(255), nullable=False, unique=True, index=True)
@@ -32,6 +46,7 @@ class Article(Base):
     index_entries = Column(jsonb_type, nullable=False, default=list)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
+    owner = relationship("User", back_populates="articles")
     journal = relationship("Journal", back_populates="articles")
     outgoing_links = relationship(
         "ArticleLink",
