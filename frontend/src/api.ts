@@ -22,6 +22,15 @@ export type ArticleSearchResult = {
   title: string
 }
 
+export type ArticleNeighbors = {
+  prev_article_id: number | null
+  next_article_id: number | null
+}
+
+export type ArticleSequence = {
+  article_ids: number[]
+}
+
 export type ApiError = {
   detail?: string
 }
@@ -66,6 +75,13 @@ export const api = {
     }),
   getJournal: (journalId: number) => request<Journal>(`/journals/${journalId}`),
   listJournalArticles: (journalId: number) => request<Article[]>(`/journals/${journalId}/articles`),
+
+  getJournalSequence: (journalId: number) => request<ArticleSequence>(`/journals/${journalId}/sequence`),
+  updateJournalSequence: (journalId: number, articleIds: number[]) =>
+    request<ArticleSequence>(`/journals/${journalId}/sequence`, {
+      method: 'POST',
+      body: JSON.stringify({ article_ids: articleIds }),
+    }),
   searchJournalArticles: (journalId: number, query: string) =>
     request<ArticleSearchResult[]>(`/journals/${journalId}/articles/search?q=${encodeURIComponent(query)}`),
   createArticle: (
@@ -77,6 +93,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getArticle: (articleId: number) => request<Article>(`/articles/${articleId}`),
+  getArticleNeighbors: (articleId: number) => request<ArticleNeighbors>(`/articles/${articleId}/neighbors`),
   updateArticle: (
     articleId: number,
     payload: { title?: string; slug?: string; content_json?: Record<string, unknown> },

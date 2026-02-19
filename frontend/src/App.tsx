@@ -391,31 +391,51 @@ function JournalsPage() { /* unchanged */
   )
 }
 
-function JournalDetailsPage({ journalId }: { journalId: number }) { /* unchanged */
+function JournalDetailsPage({ journalId }: { journalId: number }) {
   const [journal, setJournal] = useState<Journal | null>(null)
   const [articles, setArticles] = useState<Article[]>([])
+  const [sequenceIds, setSequenceIds] = useState<number[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [title, setTitle] = useState('')
   const [slug, setSlug] = useState('')
   const [content, setContent] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [sequenceMode, setSequenceMode] = useState(false)
+  const [savingSequence, setSavingSequence] = useState(false)
+
   const loadData = async () => {
     setLoading(true)
     setError(null)
     try {
-      const [journalResponse, articlesResponse] = await Promise.all([api.getJournal(journalId), api.listJournalArticles(journalId)])
+      const [journalResponse, articlesResponse, sequenceResponse] = await Promise.all([
+        api.getJournal(journalId),
+        api.listJournalArticles(journalId),
+        api.getJournalSequence(journalId),
+      ])
       setJournal(journalResponse)
       setArticles(articlesResponse)
+      setSequenceIds(sequenceResponse.article_ids)
     } catch (loadError) {
       setError((loadError as Error).message)
     } finally {
       setLoading(false)
     }
   }
+
   useEffect(() => {
     void loadData()
   }, [journalId])
+
+  const sequenceArticles = useMemo(() => {
+    const byId = new Map(articles.map((item) => [item.id, item]))
+    const ordered = sequenceIds
+      .map((id) => byId.get(id))
+      .filter((item): item is Article => Boolean(item))
+    const missing = articles.filter((item) => !sequenceIds.includes(item.id))
+    return [...ordered, ...missing]
+  }, [articles, sequenceIds])
+
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault()
     setSubmitting(true)
@@ -433,10 +453,125 @@ function JournalDetailsPage({ journalId }: { journalId: number }) { /* unchanged
     }
   }
 
+  const moveSequenceItem = (index: number, direction: -1 | 1) => {
+    setSequenceIds((current) => {
+      const orderedIds = [
+        ...current.filter((id) => articles.some((article) => article.id === id)),
+        ...articles.map((article) => article.id).filter((id) => !current.includes(id)),
+      ]
+      const nextIndex = index + direction
+      if (index < 0 || index >= orderedIds.length || nextIndex < 0 || nextIndex >= orderedIds.length) {
+        return orderedIds
+      }
+      const copy = [...orderedIds]
+      const [moved] = copy.splice(index, 1)
+      copy.splice(nextIndex, 0, moved)
+      return copy
+    })
+  }
+
+  const saveSequence = async () => {
+    setSavingSequence(true)
+    setError(null)
+    try {
+      const result = await api.updateJournalSequence(
+        journalId,
+        sequenceArticles.map((article) => article.id),
+      )
+      setSequenceIds(result.article_ids)
+    } catch (sequenceError) {
+      setError((sequenceError as Error).message)
+    } finally {
+      setSavingSequence(false)
+    }
+  }
+
   return (
-    <div className="page"><p><AppLink href="/journals">← К журналам</AppLink></p>{loading && <p className="info">Загрузка...</p>}{error && <p className="error">Ошибка: {error}</p>}{journal && <><section className="card"><h1>{journal.title}</h1><p className="muted">/{journal.slug}</p><p>{journal.description || 'Нет описания'}</p></section><section className="card"><h2>Создать статью</h2><form onSubmit={onSubmit} className="form-grid"><label>Заголовок<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label>Slug<input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="optional" /></label><label>Текст<textarea value={content} onChange={(e) => setContent(e.target.value)} rows={5} /></label><button disabled={submitting}>{submitting ? 'Создание...' : 'Создать статью'}</button></form></section><section className="card"><h2>Статьи</h2>{articles.length === 0 && <p className="info">Пока статей нет.</p>}<ul className="list">{articles.map((article) => (<li key={article.id}><AppLink href={`/articles/${article.id}`}>{article.title}</AppLink><span className="muted"> / {article.slug}</span></li>))}</ul></section></>}</div>
+    <div className="page">
+      <p>
+        <AppLink href="/journals">← К журналам</AppLink>
+      </p>
+      {loading && <p className="info">Загрузка...</p>}
+      {error && <p className="error">Ошибка: {error}</p>}
+
+      {journal && (
+        <>
+          <section className="card">
+            <h1>{journal.title}</h1>
+            <p className="muted">/{journal.slug}</p>
+            <p>{journal.description || 'Нет описания'}</p>
+          </section>
+
+          <section className="card">
+            <h2>Создать статью</h2>
+            <form onSubmit={onSubmit} className="form-grid">
+              <label>
+                Заголовок
+                <input value={title} onChange={(e) => setTitle(e.target.value)} required />
+              </label>
+              <label>
+                Slug
+                <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="optional" />
+              </label>
+              <label>
+                Текст
+                <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={5} />
+              </label>
+              <button disabled={submitting}>{submitting ? 'Создание...' : 'Создать статью'}</button>
+            </form>
+          </section>
+
+          <section className="card">
+            <div className="sequence-header">
+              <h2>Статьи</h2>
+              <button type="button" onClick={() => setSequenceMode((value) => !value)}>
+                {sequenceMode ? 'Обычный список' : 'Sequence editor'}
+              </button>
+            </div>
+
+            {articles.length === 0 && <p className="info">Пока статей нет.</p>}
+            {!sequenceMode && (
+              <ul className="list">
+                {articles.map((article) => (
+                  <li key={article.id}>
+                    <AppLink href={`/articles/${article.id}`}>{article.title}</AppLink>
+                    <span className="muted"> / {article.slug}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {sequenceMode && (
+              <div className="sequence-editor">
+                <ul className="sequence-list">
+                  {sequenceArticles.map((article, index) => (
+                    <li key={article.id}>
+                      <span>{index + 1}. {article.title}</span>
+                      <div className="sequence-actions">
+                        <button type="button" onClick={() => moveSequenceItem(index, -1)} disabled={index === 0}>↑</button>
+                        <button
+                          type="button"
+                          onClick={() => moveSequenceItem(index, 1)}
+                          disabled={index === sequenceArticles.length - 1}
+                        >
+                          ↓
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                <button type="button" onClick={saveSequence} disabled={savingSequence || sequenceArticles.length === 0}>
+                  {savingSequence ? 'Сохранение...' : 'Сохранить порядок'}
+                </button>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+    </div>
   )
 }
+
 
 function renderBlockHtml(
   block: Record<string, unknown>,
@@ -496,6 +631,10 @@ function ArticleViewPage({ articleId }: { articleId: number }) {
   const [error, setError] = useState<string | null>(null)
   const [articleTitleById, setArticleTitleById] = useState<Record<number, string>>({})
   const [articlePreviewById, setArticlePreviewById] = useState<Record<number, string>>({})
+  const [neighbors, setNeighbors] = useState<{ prev_article_id: number | null; next_article_id: number | null }>({
+    prev_article_id: null,
+    next_article_id: null,
+  })
 
   useEffect(() => {
     const loadArticle = async () => {
@@ -504,11 +643,15 @@ function ArticleViewPage({ articleId }: { articleId: number }) {
       try {
         const loadedArticle = await api.getArticle(articleId)
         setArticle(loadedArticle)
-        const relatedArticles = await api.listJournalArticles(loadedArticle.journal_id)
+        const [relatedArticles, neighborResponse] = await Promise.all([
+          api.listJournalArticles(loadedArticle.journal_id),
+          api.getArticleNeighbors(articleId),
+        ])
+        setNeighbors(neighborResponse)
         setArticleTitleById(Object.fromEntries(relatedArticles.map((item) => [item.id, item.title])))
         setArticlePreviewById(
           Object.fromEntries(
-            relatedArticles.map((item) => [item.id, (item.content_text || "").split("\n").slice(0, 2).join(" ")]),
+            relatedArticles.map((item) => [item.id, (item.content_text || '').split('\n').slice(0, 2).join(' ')]),
           ),
         )
       } catch (loadError) {
@@ -560,6 +703,10 @@ function ArticleViewPage({ articleId }: { articleId: number }) {
           ) : (
             <pre className="content">{article.content_text || JSON.stringify(article.content_json, null, 2)}</pre>
           )}
+          <div className="neighbors-nav">
+            {neighbors.prev_article_id ? <AppLink href={`/articles/${neighbors.prev_article_id}`}>← Prev</AppLink> : <span />}
+            {neighbors.next_article_id ? <AppLink href={`/articles/${neighbors.next_article_id}`}>Next →</AppLink> : null}
+          </div>
           <p>
             <AppLink href={`/articles/${article.id}/edit`}>Редактировать статью</AppLink>
           </p>

@@ -191,3 +191,50 @@ def test_index_blocks_set_is_index_and_sync_links():
 
     assert len(links) == 1
     assert links[0][1] == 123
+
+
+def test_article_sequence_set_get_and_neighbors():
+    journal_id = client.post("/api/journals", json={"title": "Sequence Journal"}).json()["id"]
+
+    article_a = client.post(f"/api/journals/{journal_id}/articles", json={"title": "A"}).json()
+    article_b = client.post(f"/api/journals/{journal_id}/articles", json={"title": "B"}).json()
+    article_c = client.post(f"/api/journals/{journal_id}/articles", json={"title": "C"}).json()
+
+    set_resp = client.post(
+        f"/api/journals/{journal_id}/sequence",
+        json={"article_ids": [article_b["id"], article_a["id"], article_c["id"]]},
+    )
+    assert set_resp.status_code == 200
+    assert set_resp.json()["article_ids"] == [article_b["id"], article_a["id"], article_c["id"]]
+
+    get_resp = client.get(f"/api/journals/{journal_id}/sequence")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["article_ids"] == [article_b["id"], article_a["id"], article_c["id"]]
+
+    first_neighbors = client.get(f"/api/articles/{article_b['id']}/neighbors").json()
+    middle_neighbors = client.get(f"/api/articles/{article_a['id']}/neighbors").json()
+    last_neighbors = client.get(f"/api/articles/{article_c['id']}/neighbors").json()
+
+    assert first_neighbors == {"prev_article_id": None, "next_article_id": article_a["id"]}
+    assert middle_neighbors == {"prev_article_id": article_b["id"], "next_article_id": article_c["id"]}
+    assert last_neighbors == {"prev_article_id": article_a["id"], "next_article_id": None}
+
+
+def test_article_sequence_rejects_foreign_or_duplicate_ids():
+    journal_id = client.post("/api/journals", json={"title": "Main Journal"}).json()["id"]
+    other_journal_id = client.post("/api/journals", json={"title": "Other Journal"}).json()["id"]
+
+    own_article = client.post(f"/api/journals/{journal_id}/articles", json={"title": "Own"}).json()
+    foreign_article = client.post(f"/api/journals/{other_journal_id}/articles", json={"title": "Foreign"}).json()
+
+    duplicate_resp = client.post(
+        f"/api/journals/{journal_id}/sequence",
+        json={"article_ids": [own_article["id"], own_article["id"]]},
+    )
+    assert duplicate_resp.status_code == 400
+
+    foreign_resp = client.post(
+        f"/api/journals/{journal_id}/sequence",
+        json={"article_ids": [own_article["id"], foreign_article["id"]]},
+    )
+    assert foreign_resp.status_code == 400
