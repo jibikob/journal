@@ -2,15 +2,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-<<<<<<< codex/add-minimal-auth-placeholder
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import delete, func
-=======
-from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from sqlalchemy import case, delete, func, or_
->>>>>>> main
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -288,12 +283,8 @@ def search_articles(
     if not db.query(Journal).filter(Journal.id == journal_id, Journal.owner_id == current_user_id).first():
         raise HTTPException(status_code=404, detail="Journal not found")
 
-<<<<<<< codex/add-minimal-auth-placeholder
-    query = db.query(Article).filter(Article.journal_id == journal_id, Article.owner_id == current_user_id)
-=======
->>>>>>> main
     search = q.strip()
-    query = db.query(Article).filter(Article.journal_id == journal_id)
+    query = db.query(Article).filter(Article.journal_id == journal_id, Article.owner_id == current_user_id)
 
     if search:
         lowered_search = search.lower()
